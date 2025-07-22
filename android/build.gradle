@@ -41,3 +41,7 @@ android {
     abortOnError false
   }
 }
+
+dependencies {
+  implementation files('libs/ZSDK_ANDROID_API.jar')
+}
