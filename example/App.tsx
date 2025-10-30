@@ -7,10 +7,10 @@ import {
   View,
 } from "react-native";
 import ReactNativeZebraLinkOs from "react-native-zebra-link-os";
-
-// Please replace these with your actual ZPL data and variables
-const TICKET_TEMPLATE = ``;
-const TICKET_VARIABLES = {};
+import { Buffer } from "buffer";
+import { fillPrn } from "./utils";
+import { TICKET_TEMPLATE, TICKET_VARIABLES, VARS } from "./data";
+(global as any).Buffer = (global as any).Buffer || Buffer;
 
 export default function App() {
   return (
@@ -36,9 +36,13 @@ export default function App() {
             title="Download Template"
             onPress={async () => {
               try {
-                const result = await ReactNativeZebraLinkOs.downloadTemplate(
-                  btoa(TICKET_TEMPLATE),
-                );
+                const filled = fillPrn(TICKET_TEMPLATE, VARS, {
+                  assumeFH: true,
+                });
+                console.log(filled);
+                const base64 = Buffer.from(filled, "utf8").toString("base64");
+                const result =
+                  await ReactNativeZebraLinkOs.downloadTemplate(base64);
                 console.log("Download Template Result:", result);
               } catch (error) {
                 if (error instanceof Error) {

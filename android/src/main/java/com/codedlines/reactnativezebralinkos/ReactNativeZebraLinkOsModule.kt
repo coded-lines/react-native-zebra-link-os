@@ -139,6 +139,7 @@ class ReactNativeZebraLinkOsModule : Module() {
                 return@AsyncFunction
             }
 
+            Log.d(TAG, "Starting Base64 decode")
             val decodedBytes: ByteArray = try {
                 Base64.decode(data, Base64.DEFAULT)
             } catch (e: IllegalArgumentException) {
@@ -146,6 +147,7 @@ class ReactNativeZebraLinkOsModule : Module() {
                 promise.reject(CodedException("DECODE_FAILED"))
                 return@AsyncFunction
             }
+            Log.d(TAG, "Base64 decode finished")
 
             val conn = discoveredPrinterUsb?.connection
             if (conn == null) {
@@ -165,6 +167,7 @@ class ReactNativeZebraLinkOsModule : Module() {
                 }
 
                 try {
+                    Log.d(TAG, "Sending template (${decodedBytes.size} bytes)")
                     conn.write(decodedBytes)
                     Log.d(TAG, "Template sent to printer (${decodedBytes.size} bytes)")
                     promise.resolve("OK")
@@ -175,6 +178,7 @@ class ReactNativeZebraLinkOsModule : Module() {
                 }
             } finally {
                 try {
+                    Log.d(TAG, "Closing printer connection")
                     conn.close()
                     Log.d(TAG, "Printer connection closed")
                 } catch (e: Exception) {
