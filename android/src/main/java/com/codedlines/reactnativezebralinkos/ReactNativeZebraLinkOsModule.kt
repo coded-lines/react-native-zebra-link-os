@@ -98,7 +98,6 @@ class ReactNativeZebraLinkOsModule : Module() {
             if (!usbManager.hasPermission(device)) {
                 val intent = UsbPermissionState.permissionIntent
                 if (intent == null) {
-                    Log.e(TAG, "usbFindAndConnect: PermissionIntent not initialized")
                     promise.reject(CodedException("NO_PERMISSION_INTENT"))
                     return@AsyncFunction
                 }
@@ -109,11 +108,34 @@ class ReactNativeZebraLinkOsModule : Module() {
                 }
 
                 pendingUsbPromise = promise
-
                 Log.d(TAG, "usbFindAndConnect: requesting USB permission")
-                usbManager.requestPermission(device, UsbPermissionState.permissionIntent)
+
+                // Listen for the result just for this request
+                UsbPermissionState.onPermissionResult = { granted ->
+                    val p = pendingUsbPromise
+                    pendingUsbPromise = null  // <-- CRUCIAL: always clear!
+
+                    if (granted) {
+                        val d = discoveredPrinterUsb!!.device
+                        Log.d(TAG, "Permission granted for ${d.deviceName}")
+                        p?.resolve(
+                            mapOf(
+                                "success" to true,
+                                "deviceName" to d.deviceName,
+                                "vendorId" to d.vendorId,
+                                "productId" to d.productId
+                            )
+                        )
+                    } else {
+                        Log.d(TAG, "Permission denied/cancelled")
+                        p?.reject(CodedException("USB_PERMISSION_DENIED"))
+                    }
+                }
+
+                usbManager.requestPermission(device, intent)
                 return@AsyncFunction
             }
+
 
             UsbPermissionState.hasPermissionToCommunicate = true
             Log.d(
@@ -325,6 +347,14 @@ class ReactNativeZebraLinkOsModule : Module() {
                     Log.e(TAG, "downloadTtfFont: error closing connection", e)
                 }
             }
+        }
+
+        AsyncFunction("resetUsbPermission") {
+            pendingUsbPromise = null
+            UsbPermissionState.onPermissionResult = null
+            UsbPermissionState.hasPermissionToCommunicate = false
+            Log.d(TAG, "USB permission state reset")
+            "OK"
         }
     }
 

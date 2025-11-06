@@ -26,21 +26,16 @@ class ReactNativeZebraLinkOsReactActivityLifecycleListener : ReactActivityLifecy
         override fun onReceive(ctx: Context, intent: Intent) {
             if (intent.action == actionUsbPermission) {
                 val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                val device: UsbDevice? =
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                    }
-
-                Log.d(TAG, "USB permission result: granted=$granted, device=$device")
-                if (granted && device != null) {
-                    UsbPermissionState.hasPermissionToCommunicate = true
-                    UsbPermissionState.onPermissionGranted?.invoke()
+                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION") intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
                 }
 
-                UsbPermissionState.onPermissionGranted = null
+                Log.d(TAG, "USB permission result: granted=$granted, device=$device")
+                UsbPermissionState.hasPermissionToCommunicate = granted
+                UsbPermissionState.onPermissionResult?.invoke(granted)
+                UsbPermissionState.onPermissionResult = null
             }
         }
     }
@@ -55,7 +50,9 @@ class ReactNativeZebraLinkOsReactActivityLifecycleListener : ReactActivityLifecy
             appCtx,
             0,
             Intent(actionUsbPermission),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            // must be MUTABLE for Android 12+ because system adds extras for usb permission
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+                    or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         registerUsbReceiverIfNeeded()
@@ -66,7 +63,6 @@ class ReactNativeZebraLinkOsReactActivityLifecycleListener : ReactActivityLifecy
     }
 
     override fun onPause(activity: Activity) {
-        unregisterUsbReceiverIfNeeded()
     }
 
     override fun onDestroy(activity: Activity) {

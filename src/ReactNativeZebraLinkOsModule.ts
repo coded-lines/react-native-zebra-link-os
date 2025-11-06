@@ -35,6 +35,12 @@ declare class ReactNativeZebraLinkOsModule extends NativeModule {
    * @throws {ZebraError}
    */
   downloadTtfFont(path: string, base64Data: string): Promise<"OK">;
+
+  /**
+   * Reset printer USB permissions.
+   * @throws {ZebraError}
+   */
+  resetUsbPermissions(): Promise<"OK">;
 }
 
 export default requireNativeModule<ReactNativeZebraLinkOsModule>(
