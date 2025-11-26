@@ -24,19 +24,26 @@ class ReactNativeZebraLinkOsReactActivityLifecycleListener : ReactActivityLifecy
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
-            if (intent.action == actionUsbPermission) {
-                val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (intent.action != actionUsbPermission) return
+
+            val usbManager = ctx.getSystemService(Context.USB_SERVICE) as UsbManager
+
+            val device: UsbDevice? =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
                 } else {
-                    @Suppress("DEPRECATION") intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
                 }
 
-                Log.d(TAG, "USB permission result: granted=$granted, device=$device")
-                UsbPermissionState.hasPermissionToCommunicate = granted
-                UsbPermissionState.onPermissionResult?.invoke(granted)
-                UsbPermissionState.onPermissionResult = null
-            }
+            val grantedExtra = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+            val granted = grantedExtra || (device != null && usbManager.hasPermission(device))
+
+            Log.d(TAG, "USB permission result: granted=$granted, device=$device")
+
+            UsbPermissionState.hasPermissionToCommunicate = granted
+            UsbPermissionState.onPermissionResult?.invoke(granted)
+            UsbPermissionState.onPermissionResult = null
         }
     }
 
@@ -46,13 +53,20 @@ class ReactNativeZebraLinkOsReactActivityLifecycleListener : ReactActivityLifecy
         actionUsbPermission = "${appCtx.packageName}.USB_PERMISSION"
         filter = IntentFilter(actionUsbPermission)
 
+        val flags = when {
+            android.os.Build.VERSION.SDK_INT >= 34 ->  // U+
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            android.os.Build.VERSION.SDK_INT >= 31 ->  // S–T
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            else ->
+                PendingIntent.FLAG_UPDATE_CURRENT
+        }
+
         UsbPermissionState.permissionIntent = PendingIntent.getBroadcast(
             appCtx,
             0,
             Intent(actionUsbPermission),
-            // must be MUTABLE for Android 12+ because system adds extras for usb permission
-            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
-                    or PendingIntent.FLAG_UPDATE_CURRENT
+            flags
         )
 
         registerUsbReceiverIfNeeded()
