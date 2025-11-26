@@ -1,6 +1,6 @@
 {
   "name": "react-native-zebra-link-os",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "React Native Zebra Link-OS",
   "main": "build/index.js",
   "types": "build/index.d.ts",
