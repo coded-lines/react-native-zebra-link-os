@@ -1,5 +1,5 @@
 import { NativeModule, requireNativeModule } from "expo";
-import { UsbDeviceInfo } from ".";
+import { UsbDeviceInfo, PrintConfirmResult } from ".";
 
 export type ZebraError = {
   code: string; // one of the documented error codes
@@ -35,6 +35,15 @@ declare class ReactNativeZebraLinkOsModule extends NativeModule {
    * @throws {ZebraError}
    */
   downloadTtfFont(path: string, base64Data: string): Promise<"OK">;
+
+  /**
+   * Send a ZPL template to the printer and confirm it printed.
+   * Checks printer readiness before sending, polls status after,
+   * and compares label counters to determine the result.
+   * @param base64Data Base64-encoded ZPL bytes
+   * @throws {ZebraError} if printer is not ready or connection fails
+   */
+  printAndConfirm(base64Data: string): Promise<PrintConfirmResult>;
 
   /**
    * Reset printer USB permissions.

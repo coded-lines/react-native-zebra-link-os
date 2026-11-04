@@ -7,7 +7,8 @@ export type ZebraErrorCode =
   | UsbFindAndConnectErrorCode
   | DownloadTemplateErrorCode
   | PrintStoredFormatErrorCode
-  | DownloadTtfFontErrorCode;
+  | DownloadTtfFontErrorCode
+  | PrintAndConfirmErrorCode;
 
 export interface ZebraNativeError extends Error {
   code: ZebraErrorCode;
@@ -52,3 +53,23 @@ export type DownloadTtfFontErrorCode =
   | "PRINTER_INIT_FAILED"
   | "INVALID_PRINTER"
   | "DOWNLOAD_FAILED";
+
+export type PrintAndConfirmErrorCode =
+  | "INVALID_DATA"
+  | "DECODE_FAILED"
+  | "NO_PRINTER"
+  | "CONNECTION_OPEN_FAILED"
+  | "PRINTER_INIT_FAILED"
+  | "WRITE_FAILED"
+  | "PAPER_OUT"
+  | "HEAD_OPEN"
+  | "PAUSED"
+  | "BUFFER_FULL"
+  | "NOT_READY";
+
+export interface PrintConfirmResult {
+  result: "confirmed" | "failed" | "unknown";
+  counterBefore: number;
+  counterAfter: number;
+  error?: string;
+}
