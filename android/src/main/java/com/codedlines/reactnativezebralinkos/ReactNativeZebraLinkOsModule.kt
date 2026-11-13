@@ -4,6 +4,7 @@ import android.content.Context
 import android.hardware.usb.UsbManager
 import android.util.Base64
 import android.util.Log
+import com.zebra.sdk.printer.SGD
 import com.zebra.sdk.printer.ZebraPrinterFactory
 import com.zebra.sdk.printer.discovery.DiscoveredPrinter
 import com.zebra.sdk.printer.discovery.DiscoveredPrinterUsb
@@ -345,6 +346,158 @@ class ReactNativeZebraLinkOsModule : Module() {
                     Log.d(TAG, "Printer connection closed")
                 } catch (e: Exception) {
                     Log.e(TAG, "downloadTtfFont: error closing connection", e)
+                }
+            }
+        }
+
+        AsyncFunction("printAndConfirm") { base64Data: String, promise: Promise ->
+            Log.d(TAG, "printAndConfirm called (data length=${base64Data.length})")
+
+            if (base64Data.isBlank()) {
+                promise.reject(CodedException("INVALID_DATA"))
+                return@AsyncFunction
+            }
+
+            val decodedBytes: ByteArray = try {
+                Base64.decode(base64Data, Base64.DEFAULT)
+            } catch (e: IllegalArgumentException) {
+                Log.e(TAG, "printAndConfirm: Base64 decode failed", e)
+                promise.reject(CodedException("DECODE_FAILED"))
+                return@AsyncFunction
+            }
+
+            val conn = discoveredPrinterUsb?.connection
+            if (conn == null) {
+                promise.reject(CodedException("NO_PRINTER"))
+                return@AsyncFunction
+            }
+
+            try {
+                try {
+                    conn.open()
+                    Log.d(TAG, "printAndConfirm: connection opened")
+                } catch (e: Exception) {
+                    Log.e(TAG, "printAndConfirm: open failed", e)
+                    promise.reject(CodedException("CONNECTION_OPEN_FAILED"))
+                    return@AsyncFunction
+                }
+
+                val printer = try {
+                    ZebraPrinterFactory.getInstance(conn)
+                } catch (e: Exception) {
+                    Log.e(TAG, "printAndConfirm: printer init failed", e)
+                    promise.reject(CodedException("PRINTER_INIT_FAILED"))
+                    return@AsyncFunction
+                }
+
+                // Pre-flight: check printer is ready before sending anything
+                val preStatus = printer.currentStatus
+                Log.d(TAG, "printAndConfirm: pre-flight status: isReadyToPrint=${preStatus.isReadyToPrint}, isPaperOut=${preStatus.isPaperOut}, isHeadOpen=${preStatus.isHeadOpen}, isPaused=${preStatus.isPaused}")
+                if (!preStatus.isReadyToPrint) {
+                    val reason = when {
+                        preStatus.isPaperOut -> "PAPER_OUT"
+                        preStatus.isHeadOpen -> "HEAD_OPEN"
+                        preStatus.isPaused -> "PAUSED"
+                        preStatus.isReceiveBufferFull -> "BUFFER_FULL"
+                        else -> "NOT_READY"
+                    }
+                    Log.e(TAG, "printAndConfirm: printer not ready: $reason")
+                    promise.reject(CodedException(reason))
+                    return@AsyncFunction
+                }
+
+                // Read label counter before printing
+                val counterBefore = try {
+                    SGD.GET("odometer.total_label_count", conn)?.trim()?.toIntOrNull() ?: -1
+                } catch (e: Exception) {
+                    Log.w(TAG, "printAndConfirm: could not read counter before: ${e.message}")
+                    -1
+                }
+                Log.d(TAG, "printAndConfirm: counterBefore=$counterBefore")
+
+                // Send the ZPL
+                try {
+                    conn.write(decodedBytes)
+                    Log.d(TAG, "printAndConfirm: ZPL sent (${decodedBytes.size} bytes)")
+                } catch (e: IOException) {
+                    Log.e(TAG, "printAndConfirm: write failed", e)
+                    promise.reject(CodedException("WRITE_FAILED"))
+                    return@AsyncFunction
+                }
+
+                // Poll status every 300ms until job is out of the buffer or timeout/error
+                val timeoutMs = 15_000L
+                val pollIntervalMs = 300L
+                val start = System.currentTimeMillis()
+                var result = "unknown"
+                var failReason: String? = null
+
+                while (System.currentTimeMillis() - start < timeoutMs) {
+                    Thread.sleep(pollIntervalMs)
+                    val s = try {
+                        printer.currentStatus
+                    } catch (e: Exception) {
+                        Log.w(TAG, "printAndConfirm: status poll failed: ${e.message}")
+                        continue
+                    }
+
+                    Log.d(TAG, "printAndConfirm: poll: isReadyToPrint=${s.isReadyToPrint}, isPaperOut=${s.isPaperOut}, isHeadOpen=${s.isHeadOpen}, isPartialFormatInProgress=${s.isPartialFormatInProgress}")
+
+                    // Detect failure
+                    if (s.isPaperOut || s.isHeadOpen || s.isReceiveBufferFull) {
+                        result = "failed"
+                        failReason = when {
+                            s.isPaperOut -> "PAPER_OUT"
+                            s.isHeadOpen -> "HEAD_OPEN"
+                            s.isReceiveBufferFull -> "BUFFER_FULL"
+                            else -> "ERROR"
+                        }
+                        Log.e(TAG, "printAndConfirm: failure detected: $failReason")
+                        // Cancel any remaining jobs in the queue
+                        try { conn.write("~JA".toByteArray()) } catch (_: Exception) {}
+                        break
+                    }
+
+                    // Job done: printer is ready and not mid-format
+                    if (s.isReadyToPrint && !s.isPartialFormatInProgress) {
+                        result = "done_polling"
+                        break
+                    }
+                }
+
+                // Read label counter after printing
+                val counterAfter = try {
+                    SGD.GET("odometer.total_label_count", conn)?.trim()?.toIntOrNull() ?: -1
+                } catch (e: Exception) {
+                    Log.w(TAG, "printAndConfirm: could not read counter after: ${e.message}")
+                    -1
+                }
+                Log.d(TAG, "printAndConfirm: counterAfter=$counterAfter")
+
+                // Determine final result
+                val finalResult = when {
+                    result == "failed" -> "failed"
+                    counterBefore >= 0 && counterAfter > counterBefore -> "confirmed"
+                    result == "done_polling" -> "confirmed"
+                    else -> "unknown"
+                }
+
+                Log.d(TAG, "printAndConfirm: finalResult=$finalResult, counterBefore=$counterBefore, counterAfter=$counterAfter")
+
+                promise.resolve(
+                    mapOf(
+                        "result" to finalResult,
+                        "counterBefore" to counterBefore,
+                        "counterAfter" to counterAfter,
+                        "error" to failReason,
+                    )
+                )
+            } finally {
+                try {
+                    conn.close()
+                    Log.d(TAG, "printAndConfirm: connection closed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "printAndConfirm: error closing connection", e)
                 }
             }
         }
