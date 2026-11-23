@@ -583,7 +583,7 @@ class ReactNativeZebraLinkOsModule : Module() {
                 Log.d(TAG, "printBatch: burst write done in ${System.currentTimeMillis() - writeStart}ms — all ${decodedList.size} tickets in printer buffer")
 
                 // Watch the counter increment per label; each tick = one ticket confirmed in FIFO order
-                val ticketResults = ArrayList<String>(decodedList.size).apply { repeat(decodedList.size) { add("unknown") } }
+                val ticketResults = ArrayList<String>(decodedList.size).apply { repeat(decodedList.size) { add("not_printed") } }
                 var confirmedCount = 0
                 var lastCounter = counterBefore
                 val timeoutMs = maxOf(20_000L, decodedList.size.toLong() * 8_000L)

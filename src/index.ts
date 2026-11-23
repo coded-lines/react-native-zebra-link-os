@@ -87,7 +87,7 @@ export type PrintBatchErrorCode =
   | "BUFFER_FULL";
 
 export interface BatchPrintResult {
-  results: Array<"confirmed" | "failed" | "unknown" | string>;
+  results: Array<"confirmed" | "not_printed" | string>;
   counterBefore: number;
   counterAfter: number;
 }
