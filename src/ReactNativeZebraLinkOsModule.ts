@@ -1,5 +1,5 @@
 import { NativeModule, requireNativeModule } from "expo";
-import { UsbDeviceInfo, PrintConfirmResult } from ".";
+import { UsbDeviceInfo, PrintConfirmResult, BatchPrintResult } from ".";
 
 export type ZebraError = {
   code: string; // one of the documented error codes
@@ -44,6 +44,14 @@ declare class ReactNativeZebraLinkOsModule extends NativeModule {
    * @throws {ZebraError} if printer is not ready or connection fails
    */
   printAndConfirm(base64Data: string): Promise<PrintConfirmResult>;
+
+  /**
+   * Send all ZPL tickets in one connection burst, poll once after all are sent,
+   * and compare the label counter diff to the expected count.
+   * @param base64Tickets Array of Base64-encoded ZPL strings, one per ticket
+   * @throws {ZebraError} if printer is not reachable or write fails
+   */
+  printBatch(base64TicketsJson: string): Promise<BatchPrintResult>;
 
   /**
    * Reset printer USB permissions.

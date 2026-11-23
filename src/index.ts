@@ -8,7 +8,8 @@ export type ZebraErrorCode =
   | DownloadTemplateErrorCode
   | PrintStoredFormatErrorCode
   | DownloadTtfFontErrorCode
-  | PrintAndConfirmErrorCode;
+  | PrintAndConfirmErrorCode
+  | PrintBatchErrorCode;
 
 export interface ZebraNativeError extends Error {
   code: ZebraErrorCode;
@@ -72,4 +73,21 @@ export interface PrintConfirmResult {
   counterBefore: number;
   counterAfter: number;
   error?: string;
+}
+
+export type PrintBatchErrorCode =
+  | "INVALID_DATA"
+  | "DECODE_FAILED"
+  | "NO_PRINTER"
+  | "CONNECTION_OPEN_FAILED"
+  | "PRINTER_INIT_FAILED"
+  | "WRITE_FAILED"
+  | "PAPER_OUT"
+  | "HEAD_OPEN"
+  | "BUFFER_FULL";
+
+export interface BatchPrintResult {
+  results: Array<"confirmed" | "failed" | "unknown" | string>;
+  counterBefore: number;
+  counterAfter: number;
 }

@@ -502,6 +502,186 @@ class ReactNativeZebraLinkOsModule : Module() {
             }
         }
 
+        AsyncFunction("printBatch") { base64TicketsJson: String, promise: Promise ->
+            // Parameter is a JSON-encoded string array — ArrayList<String> is not supported
+            // by expo-modules-core's AsyncFunction parameter reflection in this SDK version
+            val base64Tickets: ArrayList<String> = try {
+                val arr = org.json.JSONArray(base64TicketsJson)
+                ArrayList<String>(arr.length()).also { list ->
+                    for (i in 0 until arr.length()) list.add(arr.getString(i))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "printBatch: JSON parse failed — ${e.message}")
+                promise.reject(CodedException("INVALID_DATA"))
+                return@AsyncFunction
+            }
+
+            Log.d(TAG, "printBatch: START — ${base64Tickets.size} tickets")
+
+            if (base64Tickets.isEmpty()) {
+                Log.e(TAG, "printBatch: rejected — empty ticket list")
+                promise.reject(CodedException("INVALID_DATA"))
+                return@AsyncFunction
+            }
+
+            val decodedList: ArrayList<ByteArray> = try {
+                base64Tickets.mapTo(ArrayList()) { Base64.decode(it, Base64.DEFAULT) }
+            } catch (e: IllegalArgumentException) {
+                Log.e(TAG, "printBatch: Base64 decode failed", e)
+                promise.reject(CodedException("DECODE_FAILED"))
+                return@AsyncFunction
+            }
+            val totalBytes = decodedList.sumOf { it.size }
+            Log.d(TAG, "printBatch: decoded ${decodedList.size} tickets, total bytes=$totalBytes")
+
+            val conn = discoveredPrinterUsb?.connection
+            if (conn == null) {
+                Log.e(TAG, "printBatch: no printer discovered")
+                promise.reject(CodedException("NO_PRINTER"))
+                return@AsyncFunction
+            }
+
+            try {
+                try {
+                    conn.open()
+                    Log.d(TAG, "printBatch: connection opened")
+                } catch (e: Exception) {
+                    Log.e(TAG, "printBatch: connection open failed", e)
+                    promise.reject(CodedException("CONNECTION_OPEN_FAILED"))
+                    return@AsyncFunction
+                }
+
+                val printer = try {
+                    ZebraPrinterFactory.getInstance(conn)
+                } catch (e: Exception) {
+                    Log.e(TAG, "printBatch: printer init failed", e)
+                    promise.reject(CodedException("PRINTER_INIT_FAILED"))
+                    return@AsyncFunction
+                }
+
+                val counterBefore = try {
+                    SGD.GET("odometer.total_label_count", conn)?.trim()?.toIntOrNull() ?: -1
+                } catch (e: Exception) {
+                    Log.w(TAG, "printBatch: counter read before failed — ${e.message}")
+                    -1
+                }
+                Log.d(TAG, "printBatch: counterBefore=$counterBefore")
+
+                // Burst write — all tickets queued in printer buffer at once
+                val writeStart = System.currentTimeMillis()
+                Log.d(TAG, "printBatch: burst write starting")
+                try {
+                    for ((idx, bytes) in decodedList.withIndex()) {
+                        conn.write(bytes)
+                        Log.d(TAG, "printBatch: wrote ticket ${idx + 1}/${decodedList.size} (${bytes.size} bytes)")
+                    }
+                } catch (e: IOException) {
+                    Log.e(TAG, "printBatch: write failed — ${e.message}")
+                    promise.reject(CodedException("WRITE_FAILED"))
+                    return@AsyncFunction
+                }
+                Log.d(TAG, "printBatch: burst write done in ${System.currentTimeMillis() - writeStart}ms — all ${decodedList.size} tickets in printer buffer")
+
+                // Watch the counter increment per label; each tick = one ticket confirmed in FIFO order
+                val ticketResults = ArrayList<String>(decodedList.size).apply { repeat(decodedList.size) { add("unknown") } }
+                var confirmedCount = 0
+                var lastCounter = counterBefore
+                val timeoutMs = maxOf(20_000L, decodedList.size.toLong() * 8_000L)
+                val pollIntervalMs = 300L
+                val pollStart = System.currentTimeMillis()
+                var pollIteration = 0
+                var exitReason = "timeout"
+
+                Log.d(TAG, "printBatch: poll loop starting — timeoutMs=$timeoutMs, pollIntervalMs=$pollIntervalMs")
+
+                while (confirmedCount < decodedList.size && System.currentTimeMillis() - pollStart < timeoutMs) {
+                    Thread.sleep(pollIntervalMs)
+                    pollIteration++
+                    val elapsed = System.currentTimeMillis() - pollStart
+
+                    // Read counter first — attribute any new prints before checking for errors
+                    val currentCounter = try {
+                        SGD.GET("odometer.total_label_count", conn)?.trim()?.toIntOrNull() ?: lastCounter
+                    } catch (e: Exception) {
+                        Log.w(TAG, "printBatch: [poll #$pollIteration +${elapsed}ms] counter read failed — ${e.message}")
+                        lastCounter
+                    }
+
+                    if (currentCounter != lastCounter) {
+                        val newPrints = currentCounter - lastCounter
+                        Log.d(TAG, "printBatch: [poll #$pollIteration +${elapsed}ms] counter $lastCounter → $currentCounter (+$newPrints)")
+                        repeat(newPrints) {
+                            if (confirmedCount < ticketResults.size) {
+                                ticketResults[confirmedCount] = "confirmed"
+                                Log.d(TAG, "printBatch: ticket index $confirmedCount CONFIRMED (${confirmedCount + 1}/${decodedList.size})")
+                                confirmedCount++
+                            }
+                        }
+                        lastCounter = currentCounter
+                    } else {
+                        Log.d(TAG, "printBatch: [poll #$pollIteration +${elapsed}ms] counter unchanged at $currentCounter, confirmed=$confirmedCount/${decodedList.size}")
+                    }
+
+                    if (confirmedCount >= decodedList.size) {
+                        exitReason = "all_confirmed"
+                        break
+                    }
+
+                    val s = try {
+                        printer.currentStatus
+                    } catch (e: Exception) {
+                        Log.w(TAG, "printBatch: [poll #$pollIteration +${elapsed}ms] status read failed — ${e.message}")
+                        continue
+                    }
+
+                    Log.d(TAG, "printBatch: [poll #$pollIteration +${elapsed}ms] status: ready=${s.isReadyToPrint}, paperOut=${s.isPaperOut}, headOpen=${s.isHeadOpen}, paused=${s.isPaused}, partialFormat=${s.isPartialFormatInProgress}, bufferFull=${s.isReceiveBufferFull}")
+
+                    if (s.isPaperOut || s.isHeadOpen || s.isReceiveBufferFull) {
+                        val reason = when {
+                            s.isPaperOut -> "PAPER_OUT"
+                            s.isHeadOpen -> "HEAD_OPEN"
+                            s.isReceiveBufferFull -> "BUFFER_FULL"
+                            else -> "ERROR"
+                        }
+                        Log.e(TAG, "printBatch: hardware error at ticket index $confirmedCount: $reason — cancelling queue")
+                        if (confirmedCount < ticketResults.size) {
+                            ticketResults[confirmedCount] = reason
+                        }
+                        try { conn.write("~JA".toByteArray()) } catch (_: Exception) {}
+                        exitReason = "hardware_error:$reason"
+                        break
+                    }
+                }
+
+                val pollElapsed = System.currentTimeMillis() - pollStart
+                Log.d(TAG, "printBatch: poll loop exited after ${pollIteration} iterations (${pollElapsed}ms), reason=$exitReason, confirmed=$confirmedCount/${decodedList.size}")
+
+                val counterAfter = try {
+                    SGD.GET("odometer.total_label_count", conn)?.trim()?.toIntOrNull() ?: lastCounter
+                } catch (e: Exception) {
+                    Log.w(TAG, "printBatch: final counter read failed — ${e.message}")
+                    lastCounter
+                }
+
+                Log.d(TAG, "printBatch: DONE — results=$ticketResults, counterBefore=$counterBefore, counterAfter=$counterAfter, diff=${counterAfter - counterBefore}, totalTime=${System.currentTimeMillis() - writeStart}ms")
+
+                promise.resolve(
+                    mapOf(
+                        "results" to ticketResults,
+                        "counterBefore" to counterBefore,
+                        "counterAfter" to counterAfter,
+                    )
+                )
+            } finally {
+                try {
+                    conn.close()
+                    Log.d(TAG, "printBatch: connection closed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "printBatch: error closing connection — ${e.message}")
+                }
+            }
+        }
+
         AsyncFunction("resetUsbPermission") {
             pendingUsbPromise = null
             UsbPermissionState.onPermissionResult = null
